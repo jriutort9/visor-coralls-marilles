@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coralls i gorgònies de les Illes Balears · Visor de prova</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Aleo:wght@400;700&family=Lato:wght@400;700&display=swap">
+<style>
+  html, body { margin: 0; height: 100%; font-family: Lato, sans-serif; color: #2A2725; }
+  body { display: flex; flex-direction: column; }
+  header { background: #1E5BA4; color: #fff; padding: 10px 16px; }
+  header h1 { font-family: Aleo, serif; font-size: 20px; margin: 0; }
+  header p { margin: 2px 0 0; font-size: 13px; opacity: .9; }
+  #mapa { flex: 1; }
+  .panell { background: #fff; padding: 10px 12px; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.3); font-size: 14px; }
+  .panell h3 { font-family: Aleo, serif; margin: 0 0 6px; font-size: 15px; color: #1E5BA4; }
+  .panell label { display: flex; align-items: center; gap: 6px; margin: 3px 0; cursor: pointer; }
+  .punt { width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 0 1px #666; flex: none; }
+  .panell button { margin-top: 8px; background: #1E5BA4; color: #fff; border: 0; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-family: Lato, sans-serif; }
+  .fitxa h4 { font-family: Aleo, serif; margin: 0 0 4px; color: #1E5BA4; }
+  .fitxa table { border-collapse: collapse; font-size: 13px; }
+  .fitxa td { padding: 2px 6px 2px 0; vertical-align: top; }
+  .fitxa td:first-child { color: #666; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Coralls i gorgònies de les Illes Balears</h1>
+  <p>Visor de prova · dades provisionals, pendents de validació</p>
+</header>
+<div id="mapa"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// Color de cada espècie del catàleg
+const colors = {
+  'Corallium rubrum':     '#C62828',
+  'Paramuricea clavata':  '#6A1B9A',
+  'Cladocora caespitosa': '#EF6C00',
+  'Eunicella singularis': '#2E7D32',
+  'Eunicella cavolini':   '#F9A825',
+  'Eunicella verrucosa':  '#00838F'
+};
+
+// Mapa i mapes de fons
+const mapa = L.map('mapa').setView([39.5, 2.9], 8);
+const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(mapa);
+const orto = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  { maxZoom: 19, attribution: 'Esri, Maxar, Earthstar Geographics' });
+const pnoa = L.tileLayer.wms('https://www.ign.es/wms-inspire/pnoa-ma',
+  { layers: 'OI.OrthoimageCoverage', format: 'image/jpeg', attribution: 'PNOA © IGN' });
+L.control.layers({ 'Mapa (OpenStreetMap)': osm, 'Ortofoto (Esri)': orto, 'Ortofoto PNOA (IGN)': pnoa }).addTo(mapa);
+L.control.scale({ imperial: false }).addTo(mapa);
+
+let dades, capa;
+const actives = new Set(Object.keys(colors));
+
+// Fitxa emergent de cada registre
+function fitxa(p) {
+  const fila = (k, v) => (v == null || v === '') ? '' : `<tr><td>${k}</td><td>${v}</td></tr>`;
+  let prof = null;
+  if (p.prof_min_m != null) {
+    prof = (p.prof_max_m == null || p.prof_max_m == p.prof_min_m)
+      ? p.prof_min_m + ' m' : p.prof_min_m + '–' + p.prof_max_m + ' m';
+  }
+  const quant = p.quantitat == null ? null : p.quantitat + ' ' + (p.unitat_quantitat || '');
+  return `<div class="fitxa"><h4><i>${p.especie}</i></h4><table>
+    ${fila('Nom comú', p.nom_comu)}${fila('Grup', p.grup)}${fila('UICN', p.categoria_uicn)}
+    ${fila('Illa / àmbit', p.illa)}${fila('Data', p.data_obs)}${fila('Profunditat', prof)}
+    ${fila('Mètode', p.metode)}${fila('Quantitat', quant)}
+    ${fila('Font', p.font)}${fila('Titular', p.titular)}${fila('Llicència', p.llicencia)}
+    ${fila('ID registre', p.id_registre)}</table></div>`;
+}
+
+// Dibuixa els punts de les espècies marcades
+function dibuixa() {
+  if (capa) mapa.removeLayer(capa);
+  capa = L.geoJSON(dades, {
+    filter: f => actives.has(f.properties.especie),
+    pointToLayer: (f, ll) => L.circleMarker(ll, {
+      radius: 8, color: '#fff', weight: 2,
+      fillColor: colors[f.properties.especie] || '#666', fillOpacity: 0.9 }),
+    onEachFeature: (f, l) => l.bindPopup(fitxa(f.properties))
+  }).addTo(mapa);
+}
+
+// Panell de filtres per espècie i descàrrega
+const panell = L.control({ position: 'topright' });
+panell.onAdd = function () {
+  const div = L.DomUtil.create('div', 'panell');
+  L.DomEvent.disableClickPropagation(div);
+  const n = {};
+  dades.features.forEach(f => n[f.properties.especie] = (n[f.properties.especie] || 0) + 1);
+  div.innerHTML = '<h3>Espècies</h3>' + Object.keys(colors).map(e =>
+    `<label><input type="checkbox" value="${e}" checked>
+     <span class="punt" style="background:${colors[e]}"></span><i>${e}</i>&nbsp;(${n[e] || 0})</label>`).join('')
+    + '<button id="descarrega">Descarregar GeoJSON</button>';
+  div.querySelectorAll('input').forEach(c => c.addEventListener('change', () => {
+    c.checked ? actives.add(c.value) : actives.delete(c.value);
+    dibuixa();
+  }));
+  div.querySelector('#descarrega').addEventListener('click', descarrega);
+  return div;
+};
+
+// Descarrega només les espècies marcades
+function descarrega() {
+  const sel = { type: 'FeatureCollection',
+    features: dades.features.filter(f => actives.has(f.properties.especie)) };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(sel)], { type: 'application/geo+json' }));
+  a.download = 'coralls_gorgonies_balears.geojson';
+  a.click();
+}
+
+// Carrega les dades i arrenca el visor
+fetch('dades/registres_publics.geojson')
+  .then(r => r.json())
+  .then(j => {
+    dades = j;
+    dibuixa();
+    panell.addTo(mapa);
+    mapa.fitBounds(capa.getBounds(), { padding: [40, 40] });
+  })
+  .catch(e => alert("No s'han pogut carregar les dades: " + e));
+</script>
+</body>
+</html>
