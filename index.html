@@ -44,14 +44,19 @@ const colors = {
 };
 
 // Mapa i mapes de fons
-const mapa = L.map('mapa').setView([39.5, 2.9], 8);
+// preferCanvas: dibuixa en canvas, molt més ràpid amb milers de polígons
+const mapa = L.map('mapa', { preferCanvas: true }).setView([39.5, 2.9], 8);
+
+// Panells (panes) perquè els punts quedin sempre per damunt dels polígons
+mapa.createPane('poligons').style.zIndex = 410;
+mapa.createPane('punts').style.zIndex = 420;
 const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
   { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(mapa);
 const orto = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
   { maxZoom: 19, attribution: 'Esri, Maxar, Earthstar Geographics' });
 const pnoa = L.tileLayer.wms('https://www.ign.es/wms-inspire/pnoa-ma',
   { layers: 'OI.OrthoimageCoverage', format: 'image/jpeg', attribution: 'PNOA © IGN' });
-L.control.layers({ 'Mapa (OpenStreetMap)': osm, 'Ortofoto (Esri)': orto, 'Ortofoto PNOA (IGN)': pnoa }).addTo(mapa);
+const capes = L.control.layers({ 'Mapa (OpenStreetMap)': osm, 'Ortofoto (Esri)': orto, 'Ortofoto PNOA (IGN)': pnoa }, null, { collapsed: false }).addTo(mapa);
 L.control.scale({ imperial: false }).addTo(mapa);
 
 let dades, capa;
@@ -79,8 +84,9 @@ function dibuixa() {
   if (capa) mapa.removeLayer(capa);
   capa = L.geoJSON(dades, {
     filter: f => actives.has(f.properties.especie),
+    pane: 'punts',
     pointToLayer: (f, ll) => L.circleMarker(ll, {
-      radius: 8, color: '#fff', weight: 2,
+      pane: 'punts', radius: 8, color: '#fff', weight: 2,
       fillColor: colors[f.properties.especie] || '#666', fillOpacity: 0.9 }),
     onEachFeature: (f, l) => l.bindPopup(fitxa(f.properties))
   }).addTo(mapa);
@@ -115,6 +121,71 @@ function descarrega() {
   a.click();
 }
 
+
+// ---------- Capes de polígons ----------
+
+// Noms llegibles dels camps a la fitxa
+const etiquetes = {
+  habitat: 'Hàbitat', categoria_risc: 'Categoria (Decret 25/2018)',
+  bentonic: 'Tipus de fons', site_code: 'Codi Natura 2000', site_name: 'Espai protegit'
+};
+
+// Traducció provisional (no oficial) dels hàbitats de posidònia, pel codi entre parèntesis
+const habitatsCa = {
+  '030512':   'Posidonia oceanica',
+  '0304D':    'Posidonia oceanica sobre pedra amb arena',
+  '0301C':    'Algues fotòfiles sobre pedra amb Posidonia oceanica',
+  '03051201': 'Praderies de Posidonia oceanica sobre mata morta (rizoma)',
+  '03051203': 'Mata morta de Posidonia oceanica',
+  '03051202': 'Escull barrera de Posidonia oceanica'
+};
+function traduirHabitat(h) {
+  const m = /\(([^)]+)\)\s*$/.exec(h || '');
+  return (m && habitatsCa[m[1]]) ? `${habitatsCa[m[1]]} (${m[1]})` : h;
+}
+
+// Valors amb grafia catalana
+const valorsCa = { 'Coraligen': 'Coral·ligen', 'Maerl': 'Maërl' };
+
+// Fitxa genèrica: mostra tots els atributs que no siguin identificadors
+function fitxaPoligon(titol, p) {
+  const files = Object.entries(p)
+    .filter(([k, v]) => v != null && v !== '' && !/^(id|gid|fid|objectid|shape_.*)$/i.test(k))
+    .map(([k, v]) => {
+      if (k === 'habitat') v = traduirHabitat(v);
+      return `<tr><td>${etiquetes[k] || k}</td><td>${valorsCa[v] || v}</td></tr>`;
+    }).join('');
+  return `<div class="fitxa"><h4>${titol}</h4><table>${files}</table></div>`;
+}
+
+// Posidònia: un sol verd (el tipus d'hàbitat surt a la fitxa)
+const VERD_POSIDONIA = '#4E9A5B';
+
+fetch('dades/posidonia.geojson')
+  .then(r => r.json())
+  .then(j => {
+    const posidonia = L.geoJSON(j, {
+      pane: 'poligons', attribution: 'Posidònia i coral·ligen © ICGIB – Govern de les Illes Balears',
+      style: { color: VERD_POSIDONIA, weight: 0.5, fillColor: VERD_POSIDONIA, fillOpacity: 0.6 },
+      onEachFeature: (f, l) => l.bindPopup(fitxaPoligon('<i>Posidonia oceanica</i>', f.properties))
+    }).addTo(mapa);
+    capes.addOverlay(posidonia, '<span class="punt" style="background:#4E9A5B;border-radius:2px;display:inline-block"></span> Praderies de posidònia (IDEIB, provisional)');
+  })
+  .catch(e => console.error('Posidònia:', e));
+
+fetch('dades/coraligen_maerl.geojson')
+  .then(r => r.json())
+  .then(j => {
+    const coraligen = L.geoJSON(j, {
+      pane: 'poligons', attribution: 'Posidònia i coral·ligen © ICGIB – Govern de les Illes Balears',
+      style: { color: '#AD1457', weight: 1.5, fillColor: '#F48FB1', fillOpacity: 0.45 },
+      onEachFeature: (f, l) => l.bindPopup(fitxaPoligon('Fons de coral·ligen i maërl', f.properties))
+    }).addTo(mapa);
+    capes.addOverlay(coraligen, '<span class="punt" style="background:#F48FB1;border-radius:2px;display:inline-block"></span> Fons de coral·ligen i maërl (Natura 2000, IDEIB)');
+  })
+  .catch(e => console.error('Coral·ligen:', e));
+
+// ---------- Registres (punts) ----------
 // Carrega les dades i arrenca el visor
 fetch('dades/registres_publics.geojson')
   .then(r => r.json())
